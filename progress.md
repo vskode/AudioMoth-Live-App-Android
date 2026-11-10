@@ -7,6 +7,9 @@ Newest entries at the bottom. Update this file whenever a step is done or someth
 
 ## Current status (keep this section up to date)
 
+**As of the end of 2026-11-10 (session closed, documented):** the Android app has feature parity with most of the desktop app. Read `android/README.md` for architecture/build/usage. Remaining items are listed at the bottom ("Next session").
+
+
 - **Phase:** 0 (proof of concept). **384 kHz capture works on the Fairphone 6**: 10,000/10,000 full 768-byte packets, 0 errors, a valid 10.00 s WAV.
 - Key-jingle test **passed**: real ultrasonic content was captured (see log).
 - The user skipped the long-run test for now (still worth doing later). **Phase 0 is considered done.**
@@ -82,3 +85,35 @@ Newest entries at the bottom. Update this file whenever a step is done or someth
 - Written so far: `engine.c`, `plotter.c`, CMake (`engine` lib links backstage/src/stft.c via ../../../../../backstage). Both compile warning-free. Kotlin UI next.
 - Phase 1 UI built and running on the phone. Fixes along the way: the Light theme needs APPEARANCE_LIGHT_STATUS_BARS for dark status icons; minSdk raised to 30 (WindowInsets.Type/insetsController).
 - Observation: a steady ~51 kHz tone is visible in the room at 384 kHz (also seen as the 'strongest HF component 50.9 kHz' in the first Phase 0 recording). It's an environmental ultrasonic source, not an app artefact.
+
+### 2026-11-10 (cont.): Phase 1b, porting backstage.c
+- The user committed Phase 0/1 themselves and removed plan.md. **Rule: never stash/commit/push** (now in ~/.claude/CLAUDE.md).
+- The user requested: desktop-like device switching. Unplug → keep recording from the default input (phone mic) at 48 kHz, rates above 48 greyed out. Re-plug → switch to the AudioMoth immediately, stay at 48 kHz, but ultrasonic rates become enabled. Plus the rest of the missing features (Capture WAV, autosave, monitor/heterodyne, night mode, ...).
+- Decision: replace my own engine.c with a **port of backstage.c itself**. `android/tools/port_backstage.py` generates `cpp/generated/backstage_core.c` from desktop backstage.c (everything before "Exported functions"), with checked patches: Node-API removed (results polled), device layer → `cpp/android_device.c` (usbfs for the AudioMoth, miniaudio/AAudio default input = phone mic, unprocessed preset), logging → logcat (`android_logging.h`). `cpp/backstage_jni.c` re-implements every exported function (getFrame with all its device-switch/restart logic, capture, setPause, autosave, monitor, simulation, local time).
+- Kotlin announces the AudioMoth via nativeSetAudioMothDevice(fd, ep, mps, rate) and withdraws it via nativeClearAudioMothDevice() (stops the USB thread, so the fd can be closed safely). The background thread polls it every 250 ms like the desktop device check.
+- Native compiles warning-free. Next: Kotlin Backstage.kt + UI (pause = green/disables controls, Capture WAV, autosave, monitor/heterodyne, local time, simulation menu).
+- Files are saved to /storage/emulated/0/Recordings/AudioMoth Live (direct file paths work for app-owned files under scoped storage; MediaScanner after writes).
+- The user offered to compare levels with the desktop app using a wood chime. Planned for after this round.
+- Kotlin side done: `Backstage.kt` (replaces Engine.kt), MainActivity = port of index.js (pause → green + disables controls, Capture WAV, autosave Off/1/5/10/60, monitor Off/Monitor/Heterodyne with feedback warning + hold-repeat ±100 Hz + double-tap + white line, menu: Local Time, Night Mode (rebuilds UI with uiNight.css colours), Simulate (BAT.WAV packaged from ../../simulator as an asset), Colour, Low-amp, File Destination info, USB diagnostics). RECORD_AUDIO permission for the default input.
+- Tested on the phone: starts on the AudioMoth at 384 kHz via the ported engine. **Capture WAV works**: `20261110_232732_682.WAV`, header comment identical to desktop ("Recorded at 23:27:32.682 10/11/2026 (UTC+1) by AudioMoth Live using a 384kHz AudioMoth USB Microphone.").
+- Pending tests: unplug/replug (needs the user), monitor/heterodyne audio, autosave, night mode, simulation.
+- **User tested everything: all good from a UI/UX perspective.** Unplug → `re-SUBMITURB failed: No such device` → detached → default device within ~0.1 s; re-plug → AudioMoth within ~2 s at 48 kHz with ultrasonic rates re-enabled. Autosave start/stop/files, Capture WAV (5 s and 60 s), pause, all rates, heterodyne hold-repeat, simulation and local time all exercised OK.
+- Observed: two 'Restarting due to time mismatch' events at 23:35:32 and 23:36:27 (while paused, around when the phone went to sleep/adb went offline). This is the desktop's recovery path, but check whether the USB stream stalls when the screen turns off (→ foreground service / wake lock).
+- The user recorded a wind chime with the AudioMoth and the phone mic at 48 kHz: files ending `_361` and `_123` in Recordings/AudioMoth Live. Compare their frequencies and find the 'hidden message' in one of them (TODO; adb went offline before pulling).
+- **Next feature requested:** the user chooses the file destination (desktop 'Set File Destination').
+- Implemented **Set File Destination** (⋮ menu): system folder picker (ACTION_OPEN_DOCUMENT_TREE) → tree id mapped to a path (primary: → /storage/emulated/0/..., XXXX-XXXX: → /storage/XXXX-XXXX/...) → test-write a .WAV. If scoped storage blocks the folder, offer 'All files access' (MANAGE_EXTERNAL_STORAGE, declared). The choice is saved in prefs ('fileDestination'); 'Default' button = Recordings/AudioMoth Live. Builds; **not yet installed/tested** (adb offline: phone asleep / wireless debugging dropped).
+- Reconnected (adb port now 192.168.0.31:45079; `adb mdns services` finds it). Installed the file-destination build; it starts fine. **The user still needs to test** ⋮ > Set File Destination.
+- **Wind chime comparison** (both at 48 kHz): `_123` = AudioMoth, `_361` = phone 'default input'. Chime partials match: 1759.1/1759.1 Hz, 4735.7 vs 4736.0, 4782.6 vs 4782.9, 9005.3 vs 9005.5, 9046.3 vs 9047.7 Hz (≈63 ppm clock difference, normal). The AudioMoth is ~23 dB higher in RMS (4956 vs 369) and +27 dB on the 1759 Hz partial. Both recordings clip on strikes, so use lower gain for level comparisons with the desktop app.
+- Hidden message: speech at 0.5–3 s of `_361` (phone mic only). Offline Vosk (scratchpad venv) English → nothing; German small model → 'hallo wird' (consistent). Probably 'Hallo Welt'? Ask the user to confirm.
+- Scratch tools: scratchpad chime.py (peak finder), specpng.py (numpy-only spectrogram PNG), transcribe.py + vosk venv.
+- The user tested Set File Destination: works (created a folder in Documents → files saved there).
+- **Background running** implemented: `RecordingService.kt` (foreground service type microphone|connectedDevice = 0x90, partial wake lock, ongoing notification with device name + Quit action; restarted after the mic permission is granted to add the microphone type), POST_NOTIFICATIONS requested with RECORD_AUDIO, and a 100 ms background tick on the main looper that keeps calling backstage getFrame() (device switching/restarts, capture/autosave events, notification text) while the activity isn't visible. On resume, a pending device refresh updates the UI.
+- **Verified:** with the screen off (KEYCODE_SLEEP) for ~3.5 min at 384 kHz with 1-minute autosave: files 23:47:37 (partial), 23:48:00, 23:49:00, 23:50:00, each full minute exactly 46,080,488 bytes (60 s × 384 kHz × 2 + 488 header), no time-mismatch restarts, adb stayed connected.
+- Documentation: `android/README.md` rewritten (features, architecture diagram, file table, build, Wi-Fi adb, usage, notes); short Android section added to the root README.
+- Note: autosave was left ON (1 min, 384 kHz, Documents/Ttt) at the end of the test. The user should switch it off (≈2.7 GB/h).
+
+## Next session (candidates)
+1. AudioMoth gain controls via USB HID (interface 2, ep 0x01/0x81, 64-byte reports). Port the protocol from the desktop `audiomoth-usb-microphone-cmd` / AudioMoth-USB-Microphone-App.
+2. Wind chime level comparison against the desktop Electron app (same gain, softer strikes, no clipping).
+3. Plot export (PNG/JPG/PDF), landscape layout, 'Enable High Sample Rate For Default Input' (probably unnecessary on phones).
+4. ~~Hidden message~~ solved: it was 'Hello Claude' (Vosk German heard 'hallo wird'; my guess 'Hallo Welt' was close).

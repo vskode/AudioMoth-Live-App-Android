@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""
+Generate android/app/src/main/cpp/generated/backstage_core.c from the desktop
+backstage/src/backstage.c.
+
+Everything before "/* Exported functions */" (capture, resampling, STFT,
+playback/heterodyne, capture-to-WAV, autosave, simulation, background thread)
+is reused unchanged except for these patches:
+
+  - Node-API includes/variables/callbacks removed (results are polled via JNI)
+  - the miniaudio AudioMoth device layer is replaced by android_device.c
+    (usbfs isochronous streaming for the AudioMoth, miniaudio/AAudio for the
+    phone's default input)
+  - stdout logging goes to logcat (android_logging.h)
+
+The exported (N-API) functions are re-implemented as JNI in backstage_jni.c.
+
+Re-run after updating backstage.c from upstream:
+    python3 android/tools/port_backstage.py
+"""
+
+import pathlib
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+SRC = ROOT / 'backstage' / 'src' / 'backstage.c'
+OUT = ROOT / 'android' / 'app' / 'src' / 'main' / 'cpp' / 'generated' / 'backstage_core.c'
+
+text = SRC.read_text()
+
+
+def replace_once(old, new, label):
+    global text
+    count = text.count(old)
+    if count != 1:
+        sys.exit(f'Patch "{label}" expected 1 match, found {count}')
+    text = text.replace(old, new)
+
+
+def replace_between(start, end, new, label, keep_end=True):
+    """Replace text from start marker (inclusive) to end marker."""
+    global text
+    a = text.find(start)
+    b = text.find(end, a + 1)
+    if a < 0 or b < 0 or text.count(start) != 1:
+        sys.exit(f'Patch "{label}" markers not found')
+    text = text[:a] + new + (text[b:] if keep_end else text[b + len(end):])
+
+
+# 1. Includes
+
+replace_once('#include <node_api.h>\n', '#include <jni.h>\n', 'node_api include')
+
+replace_once('#include "heterodyne.h"\n',
+             '#include "heterodyne.h"\n\n#include "android_logging.h"\n',
+             'logging include')
+
+# 2. Node-API thread-safe callbacks -> polled flags
+
+replace_once('static napi_threadsafe_function captureBufferThreadSafeCallback;',
+             '/* Android: capture result polled by the UI (0 = none, 1 = success, 2 = failure) */\n\n'
+             'static volatile int32_t captureResult;\n\n'
+             'static char captureResultFilename[FILENAME_SIZE];',
+             'capture callback variable')
+
+replace_once('static napi_threadsafe_function autosaveThreadSafeCallback;',
+             '/* Android: autosave error flag and last written file, polled by the UI */\n\n'
+             'static volatile bool autosaveErrorFlag;\n\n'
+             'static pthread_mutex_t writtenFileMutex = PTHREAD_MUTEX_INITIALIZER;\n\n'
+             'static char lastWrittenFilename[FILENAME_SIZE];\n\n'
+             'static int32_t writtenFileCounter;',
+             'autosave callback variable')
+
+replace_between('/* NAPI variables */', '/* Structure for device check */', '', 'NAPI variables')
+
+replace_between('/* Thread safe callback function */', '/* Simulation thread */', '', 'thread-safe callbacks')
+
+replace_once('''    napi_acquire_threadsafe_function(captureBufferThreadSafeCallback);
+
+    napi_call_threadsafe_function(captureBufferThreadSafeCallback, &captureBufferSuccess, napi_tsfn_nonblocking);
+
+    napi_release_threadsafe_function(captureBufferThreadSafeCallback, napi_tsfn_release);''',
+             '''    if (captureBufferSuccess) strncpy(captureResultFilename, captureFilename, FILENAME_SIZE - 1);
+
+    captureResult = captureBufferSuccess ? 1 : 2;''',
+             'capture callback call')
+
+replace_once('''            napi_acquire_threadsafe_function(autosaveThreadSafeCallback);
+
+            napi_call_threadsafe_function(autosaveThreadSafeCallback, NULL, napi_tsfn_nonblocking);
+
+            napi_release_threadsafe_function(autosaveThreadSafeCallback, napi_tsfn_release);''',
+             '''            autosaveErrorFlag = true;''',
+             'autosave callback call')
+
+# 3. Report each written autosave file (so Android can add it to the media store)
+
+replace_once('''    /* Log output file */
+''', '''    /* Android: report written file */
+
+    if (success) {
+
+        pthread_mutex_lock(&writtenFileMutex);
+
+        strncpy(lastWrittenFilename, autosaveFilename, FILENAME_SIZE - 1);
+
+        writtenFileCounter += 1;
+
+        pthread_mutex_unlock(&writtenFileMutex);
+
+    }
+
+    /* Log output file */
+''', 'autosave written file')
+
+# 4. Device layer
+
+replace_between('/* Functions to check for AudioMoth */',
+                '/* Static thread functions to start and stop playback device */',
+                '/* Android device layer (AudioMoth via usbfs, default input via miniaudio/AAudio) */\n\n'
+                '#include "android_device.c"\n\n',
+                'device layer')
+
+# 5. Drop the exported N-API functions (re-implemented in backstage_jni.c)
+
+idx = text.find('/* Exported functions */')
+if idx < 0:
+    sys.exit('Exported functions marker not found')
+text = text[:idx]
+
+header = ('/* GENERATED by android/tools/port_backstage.py from backstage/src/backstage.c.\n'
+          ' * Do not edit: change the script or the hand-written android_*.c / backstage_jni.c instead. */\n\n')
+
+OUT.parent.mkdir(parents=True, exist_ok=True)
+OUT.write_text(header + text)
+print(f'Wrote {OUT.relative_to(ROOT)} ({text.count(chr(10))} lines)')

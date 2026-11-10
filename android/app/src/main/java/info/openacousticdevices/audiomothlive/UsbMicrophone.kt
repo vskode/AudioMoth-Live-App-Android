@@ -19,8 +19,6 @@ import android.util.Log
 class UsbMicrophone(private val context: Context, private val listener: Listener) {
 
     interface Listener {
-        /** deviceName is null when no microphone is connected */
-        fun onDeviceChanged(deviceName: String?, deviceSampleRate: Int)
         fun onError(message: String)
     }
 
@@ -88,10 +86,7 @@ class UsbMicrophone(private val context: Context, private val listener: Listener
 
         val d = usbManager.deviceList.values.firstOrNull { it.vendorId == AUDIOMOTH_VID && it.productId == AUDIOMOTH_PID }
 
-        if (d == null) {
-            listener.onDeviceChanged(null, 0)
-            return
-        }
+        if (d == null) return
 
         device = d
 
@@ -127,26 +122,20 @@ class UsbMicrophone(private val context: Context, private val listener: Listener
             return
         }
 
-        if (!Engine.nativeStart(c.fileDescriptor, alt.endpointAddress, alt.maxPacketSize, deviceRate)) {
-            c.releaseInterface(stream)
-            c.close()
-            listener.onError("Could not start the capture engine")
-            return
-        }
+        /* Backstage switches to the AudioMoth on its next device check (as on desktop) */
+        Backstage.nativeSetAudioMothDevice(c.fileDescriptor, alt.endpointAddress, alt.maxPacketSize, deviceRate)
 
         connection = c
         streamingInterface = stream
         idleInterface = idle
 
-        /* Same naming as backstage.c: "%dkHz AudioMoth USB Microphone" */
-        val name = "${deviceRate / 1000}kHz AudioMoth USB Microphone"
-        Log.i(TAG, "Streaming from $name (${d.productName})")
-        listener.onDeviceChanged(name, deviceRate)
+        Log.i(TAG, "AudioMoth available: ${d.productName}, $deviceRate Hz")
     }
 
     fun disconnect() {
         val c = connection ?: run { device = null; return }
-        Engine.nativeStop()
+        /* Stops the native USB thread, so the file descriptor can be closed safely */
+        Backstage.nativeClearAudioMothDevice()
         idleInterface?.let { runCatching { c.setInterface(it) } }
         streamingInterface?.let { runCatching { c.releaseInterface(it) } }
         c.close()
@@ -154,6 +143,5 @@ class UsbMicrophone(private val context: Context, private val listener: Listener
         streamingInterface = null
         idleInterface = null
         device = null
-        listener.onDeviceChanged(null, 0)
     }
 }

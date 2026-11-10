@@ -30,6 +30,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    /* The desktop simulator example (simulator/BAT.WAV) is packaged as an asset */
+    sourceSets {
+        getByName("main") {
+            assets.srcDirs("../../simulator")
+        }
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")

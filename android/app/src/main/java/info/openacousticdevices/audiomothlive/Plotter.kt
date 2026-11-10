@@ -7,7 +7,7 @@ import java.nio.ByteBuffer
 object Plotter {
 
     init {
-        System.loadLibrary("engine")
+        System.loadLibrary("backstage")
     }
 
     const val COLOUR_MAP_DEFAULT = 0

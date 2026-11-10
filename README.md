@@ -3,6 +3,10 @@ An Electron-based application for recording and analysing live audio from high s
 
 For more details on the device itself, visit [www.openacousticdevices.info](http://www.openacousticdevices.info).
 
+### Android ###
+
+This fork adds an Android version in [`android/`](android/README.md). It records from the AudioMoth USB Microphone at up to 384 kHz on an Android phone (USB OTG), using the same `backstage` engine as the desktop app. See [android/README.md](android/README.md) for features, architecture and build instructions.
+
 ### Usage ###
 Once the repository has been cloned, you must either have electron-builder installed globally, or get it for the app specifically by running:
 ```
